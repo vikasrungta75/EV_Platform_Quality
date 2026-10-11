@@ -1,0 +1,71 @@
+/* ===== Queries, part 5: predictive failure and the risk-based recall list ===== */
+const issuePreds=(pop,p)=>{const out=[];for(const v of pop)for(const x of v.pred){if(x.driver==='Wear and age'&&x.p90<.05)continue;if(p&&p.comp&&x.comp!==p.comp)continue;if(p&&p.driver==='issue'&&!ISSUE[x.driver])continue;if(p&&p.driver==='anomaly'&&x.driver!=='Anomaly')continue;if(p&&p.driver==='wear'&&x.driver!=='Wear and age')continue;out.push([v,x]);}return out;};
+Q.ev_q_pred_overview=p=>{const pop=svcPop(p),W=WSUM(pop)||1,h=p.h==='30'?0:p.h==='60'?1:2,rows=issuePreds(pop,p);
+ const byComp=COMPS.map(C=>{const rs=[];for(const v of pop){const x=predOf(v,C.id);if(x)rs.push([v,x]);}const e=k=>sum(rs.filter(r=>k(r[1])).map(r=>r[1].p[h]*r[0].w));
+   return{comp:C.id,name:C.name,safety:C.safety,issue:r0(e(x=>!!ISSUE[x.driver])),anomaly:r0(e(x=>x.driver==='Anomaly')),wear:r0(e(x=>x.driver==='Wear and age')),n50:r0(sum(rs.filter(r=>r[1].p[h]>=.5).map(r=>r[0].w))),parts:r0(e(()=>true)),cost:r0(sum(rs.map(r=>r[1].p[h]*r[0].w*COMP[C.id].part*SEG[r[0].seg].cost*.8)))};}).filter(r=>r.parts>0).sort((a,b)=>b.issue+b.anomaly-a.issue-a.anomaly);
+ const wk=13,fut=Array(wk).fill(0);for(const [v,x] of rows){if(x.driver==='Wear and age')continue;const k=Math.floor(x.ttf/7);if(k<wk)fut[k]+=v.w*Math.min(1,x.p[2]*1.15);}
+ const cl=claimsOf(p,'trueComp').filter(c=>c.issue),past=weekly(cl.filter(c=>c.day<wk*7).map(c=>c.day),cl.filter(c=>c.day<wk*7).map(claimW),wk);
+ const ttfBins=['1 to 2 weeks','3 to 4 weeks','5 to 8 weeks','9 to 13 weeks','Later'],tb=ttfBins.map(()=>0);for(const [v,x] of rows){if(x.driver==='Wear and age'||x.p[2]<.3)continue;const d=x.ttf;tb[d<=14?0:d<=28?1:d<=56?2:d<=91?3:4]+=v.w;}
+ const any=[.1,.3,.5].map(t=>r0(WSUM(pop.filter(v=>v.pAny[h]>=t)))),top50=rows.filter(r=>r[1].p[h]>=.5);
+ return{selection:cohortText(p),horizon:HZ[h],
+  kpis:{n50:r0(WSUM(uniq(top50.map(r=>r[0])))),expected:r0(sum(byComp.map(r=>r.issue+r.anomaly))),expectedAll:r0(sum(byComp.map(r=>r.parts))),cost:r0(sum(byComp.map(r=>r.cost))),stop:any[1],stopShare:r2(any[1]/W*100),safety:r0(sum(top50.filter(r=>COMP[r[1].comp].safety>=3).map(r=>r[0].w))),high:r0(sum(top50.filter(r=>r[1].conf==='High').map(r=>r[0].w)))},
+  byComp,weekly:{x:Array.from({length:wk},(_,i)=>'Week -'+(wk-i)).concat(Array.from({length:wk},(_,i)=>'Week +'+(i+1))),past:past.concat(Array(wk).fill(null)),future:Array(wk-1).fill(null).concat([past[wk-1]]).concat(fut.map(r0))},
+  ttf:ttfBins.map((b,i)=>[b,r0(tb[i])]),bySeg:SEGS.map(s=>{const sp=pop.filter(v=>v.seg===s.id);if(!sp.length)return null;let e=0;for(const v of sp)for(const x of v.pred)if(x.driver!=='Wear and age')e+=x.p[h]*v.w;return[s.name,r0(e),r1(e/(WSUM(sp)||1)*1000)];}).filter(Boolean),
+  tile:stateTile(pop,vs=>{let e=0;for(const v of vs)for(const x of v.pred)if(x.driver!=='Wear and age')e+=x.p[h];return r1(e/vs.length*1000);}),
+  scatter:['Safety critical','Other'].map((n,i)=>[n,stride(rows.filter(r=>r[1].driver!=='Wear and age'&&r[1].p[2]>=.15&&(COMP[r[1].comp].safety>=3)===(i===0)),260).map(([v,x])=>[x.ttf,r0(x.p[2]*100),v.vin+' · '+COMP[x.comp].name])]),
+  byDriver:top(countBy(rows.filter(r=>r[1].driver!=='Wear and age'),r=>ISSUE[r[1].driver]?r[1].driver+' '+ISSUE[r[1].driver].name:'Anomaly, no known cause',r=>r[1].p[h]*r[0].w),14).map(([k,n])=>[k,r0(n)]),
+  vehicleRisk:[['Above 10%',any[0]],['Above 30%',any[1]],['Above 50%',any[2]]]};};
+Q.ev_q_pred_vehicles=p=>{const pop=svcPop(p);let rows=issuePreds(pop,p).filter(r=>r[1].driver!=='Wear and age'||p.driver==='wear');if(p.band)rows=rows.filter(r=>bandOf(r[1])===p.band);if(p.safety==='1')rows=rows.filter(r=>COMP[r[1].comp].safety>=3);if(p.issueId)rows=rows.filter(r=>r[1].driver===p.issueId);
+ rows.sort((a,b)=>b[1].p[0]-a[1].p[0]||b[1].p[2]-a[1].p[2]||a[1].ttf-b[1].ttf);const pg=page(rows,p,60);
+ return{total:pg.total,weighted:r0(sum(rows.map(r=>r[0].w))),page:pg.page,size:pg.size,bands:['Now','Within 30 days','Within 60 days','Within 90 days','Monitor'].map(b=>[b,r0(sum(rows.filter(r=>bandOf(r[1])===b).map(r=>r[0].w)))]),
+  rows:pg.rows.map(([v,x])=>({vin:v.vin,model:MODEL[v.model].name,city:v.city,state:v.state,comp:COMP[x.comp].name,p:x.p.map(q=>r0(q*100)),ttf:x.ttf,band:bandOf(x),driver:x.driver,conf:x.conf,evid:x.evid,safety:COMP[x.comp].safety>=3,any:r0(v.pAny[2]*100),dealer:v.dealer}))};};
+// Fault-code forecast: next four weeks from the recent trend, and which vehicles are expected to set the next code in a known sequence.
+Q.ev_q_pred_dtc=p=>{const ev=dtcOf(p),pop=svcPop(p),wk=13,x=Array.from({length:wk},(_,i)=>'Week -'+(wk-i)).concat(['Week +1','Week +2','Week +3','Week +4']);
+ const codes=[...groupBy(ev.filter(e=>e.day<wk*7),e=>e.code).entries()].map(([code,es])=>{const vs=Array(wk).fill(0);const seen=Array.from({length:wk},()=>new Set());es.forEach(e=>{const k=wk-1-Math.floor(e.day/7);if(k>=0&&!seen[k].has(e.v)){seen[k].add(e.v);vs[k]+=FLEET[e.v].w;}});
+   const y=vs.slice(-8),xm=3.5,ym=mean(y),sl=sum(y.map((v,i)=>(i-xm)*(v-ym)))/42,f=[1,2,3,4].map(k=>r0(Math.max(0,ym+sl*(3.5+k))));
+   return{code,def:DTC[code].def,crit:CRIT[DTC[code].crit],critN:DTC[code].crit,comp:COMP[DTC[code].comp].name,last4:r0(sum(vs.slice(-4))),next4:sum(f),change:sum(vs.slice(-4))?r0((sum(f)/sum(vs.slice(-4))-1)*100):null,hist:vs.map(r0),f};}).sort((a,b)=>b.next4-a.next4);
+ const next=[];for(const v of pop)for(const a of v.iss){if(a.fixed)continue;const I=ISSUE[a.id];if(!I.seq.length)continue;const have=I.seq.map(c=>v.dtcs.some(e=>e.code===c&&e.day<150)),j=have.lastIndexOf(true);if(j<0||j===I.seq.length-1)continue;const pr=predOf(v,I.comp);if(!pr||pr.driver!==I.id)continue;
+   const nc=I.seq[j+1],days=r0(Math.max(2,pr.ttf*(1-(j+2)/(I.seq.length+1))+3));next.push({vin:v.vin,model:MODEL[v.model].name,city:v.city,has:I.seq[j],next:nc,def:DTC[nc].def,crit:CRIT[DTC[nc].crit],days,p:r0(clamp(pr.p[2]*1.1,0,.97)*100),issue:I.id,w:v.w});}
+ next.sort((a,b)=>a.days-b.days);const sel=codes.slice(0,5);
+ return{selection:cohortText(p),kpis:{rising:codes.filter(c=>c.change!==null&&c.change>=25&&c.next4>=20).length,next4:r0(sum(codes.map(c=>c.next4))),nextVehicles:r0(sum(next.map(n=>n.w))),critical:r0(sum(next.filter(n=>n.crit==='Critical').map(n=>n.w)))},
+  codes:codes.slice(0,40),chart:{x,series:sel.map(c=>[c.code,c.hist.concat([null,null,null,null]),c.hist.map((_,i)=>i===wk-1?c.hist[i]:null).concat(c.f)])},next:next.slice(0,80),
+  byNext:top(countBy(next,n=>n.next+' '+n.def,n=>n.w),8).map(([k,n])=>[k,r0(n)])};};
+Q.ev_q_pred_model=()=>{const all=backtest(),per=ISSUES.map(I=>{const b=backtest(I.id);return[I.id,I.name,b.n,b.positives,b.precision,b.recall,b.mae];});
+ const rows=[];for(const v of INSVC)for(const a of v.iss){if(a.fixed)continue;const x=predOf(v,ISSUE[a.id].comp);rows.push([x&&x.driver===a.id?x.p90:0,a.x<=90?1:0]);}
+ const bins=[0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.001],cal=bins.slice(0,-1).map((b,i)=>{const r=rows.filter(q=>q[0]>=b&&q[0]<bins[i+1]);return[r0(b*100)+' to '+r0(Math.min(1,bins[i+1])*100)+'%',r.length?pct(sum(r.map(q=>q[1])),r.length):null,r.length];});
+ // How well each kind of evidence separates vehicles that fail within 90 days from those that do not.
+ const feat=[['Health-indicator drift',(v,a)=>a.p],['Fault codes from the sequence, last 90 days',(v,a)=>uniq(v.dtcs.filter(e=>ISSUE[a.id].seq.includes(e.code)&&e.day<90).map(e=>e.code)).length],['Usage and climate stress',(v,a)=>ISSUE[a.id].accel(v)],['Months since exposure began',(v,a)=>a.expM],['Earlier repair that did not fix it',(v,a)=>a.pending?1:0]];
+ const pairs=[];for(const v of INSVC)for(const a of v.iss)if(!a.fixed)pairs.push([v,a,a.x<=90?1:0]);
+ const imp=feat.map(([n,f])=>{const y1=pairs.filter(q=>q[2]).map(q=>f(q[0],q[1])),y0=pairs.filter(q=>!q[2]).map(q=>f(q[0],q[1])),sp=Math.sqrt((sdev(y1)**2+sdev(y0)**2)/2)||1;return[n,r2(Math.abs(mean(y1)-mean(y0))/sp)];}).sort((a,b)=>b[1]-a[1]);
+ return{all,per,cal,gain:all.gain,imp,note:'These figures come from a simulated back-test. The data generator knows when each vehicle will fail, so the estimate can be scored against it. They show what a model report would look like; they are not the accuracy of a trained model on real vehicles.'};};
+
+/* ---- Recall: scope the population, then order vehicles by failure probability and time to failure ---- */
+const SEVW=[.4,.7,1,1.6];
+function riskList(I){const out=[];for(const v of INSVC){const a=v.iss.find(x=>x.id===I.id&&!x.fixed);if(!a)continue;const x=predOf(v,I.comp);const p=x&&x.driver===I.id?x.p:[0,0,0],ttf=x&&x.driver===I.id?x.ttf:r0(medResid(a.expM,I.k,I.eta/I.accel(v)));
+  const exposure=clamp(v.daily/SEG[v.seg].daily[0],.5,2),score=r1(clamp((p[0]*55+p[1]*25+p[2]*20)*(.75+.25*Math.min(1.6,exposure)),0,100));
+  out.push({v,a,p,ttf,score,band:p[0]>=.5?'Now':p[1]>=.5?'Within 30 days':p[2]>=.5?'Within 60 days':p[2]>=.2?'Within 90 days':'Monitor',evid:x&&x.driver===I.id?x.evid.slice(1):[]});}
+ return out.sort((a,b)=>b.score-a.score||a.ttf-b.ttf);}
+Q.ev_q_recall_candidates=(p,rid)=>{const rows=ISSUES.map(I=>{const s=ISTAT[I.id],C=COMP[I.comp],hz=s.openW?s.e90/s.openW:0,score=r0(SEVW[I.safety]*(Math.log10(1+s.openW)*12+hz*220+(C.stop?8:0)));
+   const rec=I.safety>=3?'Recall candidate':I.safety===2&&(hz>.12||s.failedPct>20)?'Service campaign candidate':I.causeType==='Software'?'Over-the-air update':'Repair on failure, monitor';
+   return{id:I.id,name:I.name,comp:C.name,models:I.models.map(m=>MODEL[m].name).join(', '),safety:I.safety,status:I.status,openW:r0(s.openW),affW:r0(s.affW),failedPct:s.failedPct,e90:s.e90,n30:s.n30,stockW:r0(s.stockW),score,rec,handover:HANDOVER[I.id]||'Not proposed',mode:I.mode};}).sort((a,b)=>b.score-a.score);
+ const vis=rid==='RCL'?rows.filter(r=>r.handover.startsWith('Approved')):rows;
+ return{restricted:rid==='RCL',rows:vis,kpis:{candidates:vis.filter(r=>r.rec==='Recall candidate').length,vehicles:r0(sum(vis.filter(r=>r.rec==='Recall candidate').map(r=>r.openW))),now:r0(sum(vis.filter(r=>r.rec==='Recall candidate').map(r=>r.n30))),approved:vis.filter(r=>r.handover.startsWith('Approved')).length,stock:r0(sum(vis.filter(r=>r.rec==='Recall candidate').map(r=>r.stockW)))},
+  scatter:[3,2,1,0].map(sf=>['Safety '+sf,vis.filter(r=>r.safety===sf).map(r=>[r.openW,r.openW?r1(r.e90/r.openW*100):0,r.id+' '+r.name,clamp(8+r.score/6,8,34)])]).filter(s=>s[1].length)};};
+Q.ev_q_recall_issue=(p,rid)=>{const I=ISSUE[p.id];if(!I)return{error:'Choose an issue.'};if(rid==='RCL'&&!(HANDOVER[I.id]||'').startsWith('Approved'))return{error:'This list has not been approved by quality for the recall office.',status:403};
+ const C=COMP[I.comp],list=riskList(I),s=ISTAT[I.id],modelPop=FLEET.filter(v=>I.models.includes(v.model)),E=clusterEvidence(I.models,I.comp,I),win=E.fs.find(f=>f.kind==='Build'),cohortAll=modelPop.filter(v=>I.pred(v)),bFrom=Math.min(...cohortAll.map(v=>v.buildM)),bTo=Math.max(...cohortAll.map(v=>v.buildM)),inWin=modelPop.filter(v=>v.buildM>=bFrom&&v.buildM<=bTo),W=sum(list.map(r=>r.v.w))||1;
+ const bands=['Now','Within 30 days','Within 60 days','Within 90 days','Monitor'].map(b=>{const rs=list.filter(r=>r.band===b);return{band:b,w:r0(sum(rs.map(r=>r.v.w))),share:pct(sum(rs.map(r=>r.v.w)),W),e90:r0(sum(rs.map(r=>r.p[2]*r.v.w))),ttf:rs.length?r0(quant(rs.map(r=>r.ttf),.5)):null};});
+ // Three strategies, same weekly workshop capacity: do nothing; call in by build date (the usual blanket order); call in by risk.
+ const cap=Math.max(1,Math.ceil(list.length/(+p.weeks||12))),weeks=26,ord={risk:list,build:[...list].sort((a,b)=>a.v.buildM-b.v.buildM||a.v.i-b.v.i)};
+ const sim=order=>{const repairWeek=new Map();if(order)order.forEach((r,i)=>{const u=h32(r.v.i,404);repairWeek.set(r.v.i,2+Math.floor(i/cap)+(u<.7?0:2+Math.floor(u*13)%5));});const cum=[];let c=0;for(let w=0;w<weeks;w++){for(const r of list){const fw=Math.floor(Math.max(0,r.a.x)/7);if(fw===w&&(!order||repairWeek.get(r.v.i)>w))c+=r.v.w;}cum.push(r0(c));}return cum;};
+ const none=sim(null),byBuild=sim(ord.build),byRisk=sim(ord.risk),avg=s.avgCost||C.part,first=list.slice(0,Math.ceil(list.length*.25)),truth=list.filter(r=>r.a.x<=90);
+ const stock=modelPop.filter(v=>!v.inService&&I.pred(v)),ttfB=['Under 2 weeks','2 to 4 weeks','1 to 2 months','2 to 3 months','3 to 6 months','Over 6 months'],tb=ttfB.map(()=>0);list.forEach(r=>{const d=r.ttf;tb[d<14?0:d<28?1:d<60?2:d<91?3:d<182?4:5]+=r.v.w;});
+ const lim=rid==='RCL';
+ return{id:I.id,name:I.name,comp:C.name,safety:I.safety,status:I.status,handover:HANDOVER[I.id]||'Not proposed',mode:I.mode,fix:I.fix,cause:lim?null:I.cause,restricted:lim,
+  kpis:{open:r0(W),now:bands[0].w,d30:bands[0].w+bands[1].w,e90:r0(sum(list.map(r=>r.p[2]*r.v.w))),stock:r0(WSUM(stock)),firstWave:r0(sum(first.map(r=>r.v.w))),firstCapture:pct(first.filter(r=>r.a.x<=90).length,truth.length||1),weeks:+p.weeks||12,perWeek:r0(cap*(list[0]?list[0].v.w:1))},
+  funnel:[['All '+I.models.map(m=>MODEL[m].name).join(' and ')+' built',r0(WSUM(modelPop))],['Built in the affected period ('+mlabel(bFrom)+' to '+mlabel(bTo)+')',r0(WSUM(inWin))],['Matches the cause (lot, line, shift or software)',r0(WSUM(cohortAll))],['Not yet repaired or updated',r0(W+WSUM(stock))],['Likely to fail within 90 days',bands[0].w+bands[1].w+bands[2].w]],
+  bands,ttf:ttfB.map((b,i)=>[b,r0(tb[i])]),
+  scenario:{x:Array.from({length:weeks},(_,i)=>'Week '+(i+1)),none,byBuild,byRisk,avoidedRisk:none[weeks-1]-byRisk[weeks-1],avoidedBuild:none[weeks-1]-byBuild[weeks-1],extra:byBuild[weeks-1]-byRisk[weeks-1],extraCost:lim?null:r0((byBuild[weeks-1]-byRisk[weeks-1])*avg)},
+  gain:backtest(I.id).gain,tile:stateTile(INSVC.filter(v=>I.models.includes(v.model)),vs=>{const ids=new Set(vs.map(v=>v.i));return r0(sum(list.filter(r=>ids.has(r.v.i)&&(r.band==='Now'||r.band==='Within 30 days')).map(r=>r.v.w)));}),
+  dealers:top(countBy(first,r=>r.v.dealer,r=>r.v.w),12).map(([k,n])=>[k,r0(n),r0(sum(list.filter(r=>r.v.dealer===k).map(r=>r.v.w)))]),
+  stock:lim?null:{rows:['Plant yard','In transit','Dealer stock'].map(k=>[k,r0(WSUM(stock.filter(v=>v.stock===k)))]),clean:win?mlabel(Math.min(35,win.to+1)):null},
+  list:list.slice(0,+p.limit||150).map((r,i)=>({rank:i+1,vin:r.v.vin,model:MODEL[r.v.model].name,city:r.v.city,state:r.v.state,dealer:r.v.dealer,usage:r.v.usage,score:r.score,p:r.p.map(q=>r0(q*100)),ttf:r.ttf,band:r.band,evid:r.evid.join('; ')||'Cohort membership only',stands:r0(r.v.w)})),total:list.length};};

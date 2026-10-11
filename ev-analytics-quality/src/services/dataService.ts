@@ -1,0 +1,50 @@
+// Data service: one function per named query.
+import { fetchData, postJson } from './http';
+
+export type Cohort = { seg?: string; model?: string; zone?: string; state?: string; plant?: string; usage?: string; sw?: string; buildY?: string; comp?: string };
+const q = (name: string) => (p: Record<string, any> = {}) => fetchData('ev_q_' + name, p);
+
+export const fetchFilters = q('filters');
+export const fetchHome = q('home');
+export const fetchAlerts = q('alerts');
+export const fetchAgents = q('agents');
+export const fetchEwOverview = q('ew_overview');
+export const fetchEwIssue = q('ew_issue');
+export const fetchDtc = q('dtc');
+export const fetchDtcCode = q('dtc_code');
+export const fetchDrift = q('drift');
+export const fetchLaunch = q('launch');
+export const fetchSamples = q('rc_samples');
+export const fetchVinReport = q('vinreport');
+export const fetchCompare = q('compare');
+export const fetchKpiDetail = q('kpi_detail');
+export const fetchPattern = q('pattern');
+export const fetchNff = q('nff');
+export const fetchIssues = q('issues');
+export const fetchIssue = q('issue');
+export const searchVehicles = (text: string, limit = 12) => fetchData('ev_q_vehicle_search', { q: text, limit });
+export const fetchVehicle = q('vehicle');
+export const fetchPredOverview = q('pred_overview');
+export const fetchPredVehicles = q('pred_vehicles');
+export const fetchPredDtc = q('pred_dtc');
+export const fetchPredModel = q('pred_model');
+export const fetchRecallCandidates = q('recall_candidates');
+export const fetchRecallIssue = q('recall_issue');
+export const fetchWarOverview = q('war_overview');
+export const fetchWarTriangle = q('war_triangle');
+export const fetchWarDealers = q('war_dealers');
+export const fetchWarClaims = q('war_claims');
+export const fetchWarRecovery = q('war_recovery');
+export const fetchWarReserve = q('war_reserve');
+export const fetchSupOverview = q('sup_overview');
+export const fetchSupLot = q('sup_lot');
+export const fetchPlant = q('plant');
+export const fetchContain = q('contain');
+export const fetchBlueprint = q('blueprint');
+export const fetchKpis = q('kpis');
+export const fetchResearch = q('research');
+
+export const analyse = (body: { title: string; sub?: string; facts: string[]; data?: string; scope?: string }) => postJson('/api/ai/analyze', body);
+export const askSage = (text: string, history: any[], extra?: string) => postJson('/api/ai/chat', { q: text, history, extra });
+export const webResearch = (body: { vin: string }) => postJson('/api/ai/research', body);
+export const writeReport = (body: { vin: string }) => postJson('/api/ai/report', body);
